@@ -129,11 +129,11 @@ def parse_args(input_args=None):
         help="Pretrained tokenizer name or path if not the same as model_name",
     )
     parser.add_argument(
-        "--instance_data_dir",
+        "--instance_data_dirs_file",
         type=str,
         default=None,
         required=True,
-        help="A folder containing the training data of instance images.",
+        help="A file of the folders containing the training data of instance images.",
     )
     parser.add_argument(
         "--class_data_dir",
@@ -143,11 +143,11 @@ def parse_args(input_args=None):
         help="A folder containing the training data of class images.",
     )
     parser.add_argument(
-        "--instance_prompt",
+        "--instance_prompts_file",
         type=str,
         default=None,
         required=True,
-        help="The prompt with identifier specifying the instance",
+        help="A txt file of the prompts with identifier specifying the instance",
     )
     parser.add_argument(
         "--class_prompt",
@@ -373,6 +373,11 @@ def parse_args(input_args=None):
             warnings.warn("You need not use --class_data_dir without --with_prior_preservation.")
         if args.class_prompt is not None:
             warnings.warn("You need not use --class_prompt without --with_prior_preservation.")
+    
+    prompts = open(args.instance_prompts_file, "r")
+    args.instance_prompts = prompts.readlines()
+    dirs = open(args.instance_data_dirs_file, "r")
+    args.instance_data_dirs = dirs.readlines()
 
     return args
 
@@ -385,8 +390,8 @@ class DreamBoothDataset(Dataset):
 
     def __init__(
         self,
-        instance_data_root,
-        instance_prompt,
+        instance_data_roots,
+        instance_prompts,
         tokenizer,
         class_data_root=None,
         class_prompt=None,
@@ -396,14 +401,21 @@ class DreamBoothDataset(Dataset):
         self.size = size
         self.center_crop = center_crop
         self.tokenizer = tokenizer
+        
+        self.instance_data_roots = []
+        self.instance_images_path = []
+        self.num_instance_images = 0
+        self.instance_prompts = []
+        for data_root, instance_prompt in zip(instance_data_roots, instance_prompts):
+            path = Path(data_root)
+            self.instance_data_roots.append(path)
 
-        self.instance_data_root = Path(instance_data_root)
-        if not self.instance_data_root.exists():
-            raise ValueError("Instance images root doesn't exists.")
+            if not path.exists():
+                raise ValueError(f"Instance {path} images root doesn't exists.")
 
-        self.instance_images_path = list(Path(instance_data_root).iterdir())
-        self.num_instance_images = len(self.instance_images_path)
-        self.instance_prompt = instance_prompt
+            self.instance_images_path += list(Path(data_root).iterdir())
+            self.num_instance_images += len(self.instance_images_path)
+            self.instance_prompts += len(self.instance_images_path) * [instance_prompt]
         self._length = self.num_instance_images
 
         if class_data_root is not None:
@@ -435,7 +447,7 @@ class DreamBoothDataset(Dataset):
             instance_image = instance_image.convert("RGB")
         example["instance_images"] = self.image_transforms(instance_image)
         example["instance_prompt_ids"] = self.tokenizer(
-            self.instance_prompt,
+            self.instance_prompts[index % self.num_instance_images],
             truncation=True,
             padding="max_length",
             max_length=self.tokenizer.model_max_length,
@@ -732,8 +744,8 @@ def main(args):
 
     # Dataset and DataLoaders creation:
     train_dataset = DreamBoothDataset(
-        instance_data_root=args.instance_data_dir,
-        instance_prompt=args.instance_prompt,
+        instance_data_roots=args.instance_data_dirs,
+        instance_prompts=args.instance_prompts,        
         class_data_root=args.class_data_dir if args.with_prior_preservation else None,
         class_prompt=args.class_prompt,
         tokenizer=tokenizer,
